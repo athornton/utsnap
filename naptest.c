@@ -1,21 +1,24 @@
 /*
  * naptest -- check that /dev/nap actually delays, by how much, and that
- * it sleeps rather than spins.
+ * it sleeps rather than spins.  UTS version.
  *
- * Elapsed time comes from ftime(2) (syscall 35, "formerly sleep"), the
- * only V7 call with sub-second resolution: sys4.c builds its millitm
- * from lbolt, so it genuinely advances within a second.  time(2) would
- * round every nap to a second and "prove" any length correct.  Note
- * ftime's resolution is still one tick -- 1000/HZ = 16 ms steps at
- * HZ 60 -- so a 1-tick nap is measured by a clock no finer than itself
- * and single-tick rows are necessarily noisy.
+ * Elapsed time comes from ftime(2).  On UTS that is read straight from
+ * the S/370 TOD clock (sys4.c: millitm = TOD microseconds / 1000), so it
+ * is genuinely millisecond-accurate -- much finer than a nap tick, and
+ * independent of the nap driver's own arithmetic.  time(2) would round
+ * every nap to a second and "prove" any length correct.
  *
  * CPU time comes from times(2), and only to tell sleeping from spinning.
- * V7's times() returns nothing useful (sys4.c copies out the four time_t
- * values and never sets u_r), so elapsed time must NOT be derived from
- * its return value -- a correct nap burns no CPU, so the tms_ figures
+ * UTS's times() reports MICROSECONDS (see /usr/include/sys/times.h), not
+ * clock ticks as in V7.  A correct nap burns no CPU, so the tms_ figures
  * alone cannot show that a delay happened at all.  The two clocks answer
  * two different questions and both are needed.
+ *
+ * Under VM/370 the clock comparator interrupt that ends a nap is
+ * simulated by CP, and the UTS virtual machine must also be dispatched
+ * before the napper can run, so expect lumpier timings than on bare
+ * hardware.  Widen the bounds from observed numbers rather than assuming
+ * the first failure is a driver bug.
  *
  *	cc -o naptest naptest.c libnap.c
  *	./naptest
@@ -28,21 +31,31 @@
 
 int tries[] = { 1, 2, 3, 6, 12, 30, 60, 0 };
 
-/* elapsed milliseconds between two ftime samples */
-long
+/*
+ * Elapsed milliseconds between two ftime samples.
+ *
+ * Everything that is multiplied in this file is an int.  UTS's cc
+ * cannot multiply two longs (64 bits here): it stops with "No code
+ * table for op 133" on user code, and in the kernel the same operation
+ * becomes a call to an _llmul that is not linked.  The quantities fit:
+ * the longest nap is two seconds.
+ */
+int
 msdiff(a, b)
 struct timeb *a, *b;
 {
+	int secs;
 
-	return ((long)(b->time - a->time) * 1000L
-		+ (long)b->millitm - (long)a->millitm);
+	secs = b->time - a->time;
+	return (secs * 1000 + (int)b->millitm - (int)a->millitm);
 }
 
 main()
 {
 	struct timeb f0, f1;
 	struct tms c0, c1;
-	long want_ms, got_ms, cpu_ticks, tick_ms;
+	long cpu_us;
+	int want_ms, got_ms, tick_ms;
 	int hz, i, want;
 	int fail;
 
@@ -51,13 +64,13 @@ main()
 		printf("naptest: naphz failed; is /dev/nap present?\n");
 		exit(1);
 	}
-	tick_ms = 1000L / hz;
-	printf("HZ = %d (%ld ms/tick)\n", hz, tick_ms);
-	printf("ticks\twant\tgot\tcpu\n");
+	tick_ms = 1000 / hz;
+	printf("HZ = %d (%d ms/tick)\n", hz, tick_ms);
+	printf("ticks\twant\tgot\tcpu(us)\n");
 
 	for (i = 0; tries[i] != 0; i++) {
 		want = tries[i];
-		want_ms = (long)want * tick_ms;
+		want_ms = want * 1000 / hz;
 
 		ftime(&f0);
 		times(&c0);
@@ -70,17 +83,17 @@ main()
 		times(&c1);
 
 		got_ms = msdiff(&f0, &f1);
-		cpu_ticks = (c1.tms_utime - c0.tms_utime)
-			  + (c1.tms_stime - c0.tms_stime);
-		printf("%d\t%ldms\t%ldms\t%ld", want, want_ms, got_ms,
-			cpu_ticks);
+		cpu_us = (c1.tms_utime - c0.tms_utime)
+		       + (c1.tms_stime - c0.tms_stime);
+		printf("%d\t%dms\t%dms\t%ld", want, want_ms, got_ms,
+			cpu_us);
 
 		/*
 		 * A nap waits between want-1 and want ticks (the current
 		 * tick is already partly spent), ftime itself is only
 		 * tick-accurate, and the process need not be rescheduled the
 		 * instant it wakes.  So allow two ticks of slack below and
-		 * generous slack above.  Under simh these bounds are a
+		 * generous slack above.  Under VM these bounds are a
 		 * guess; widen them from observed numbers rather than
 		 * assuming the first failure is a driver bug.
 		 */
@@ -93,7 +106,7 @@ main()
 		 * sleeping -- exactly what this driver exists to avoid.
 		 * Only meaningful once the nap is several ticks long.
 		 */
-		if (want >= 6 && cpu_ticks >= want / 2)
+		if (want >= 6 && cpu_us >= want_ms * 500)
 			printf("\tBUSY-WAITED"), fail++;
 		printf("\n");
 	}

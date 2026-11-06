@@ -13,10 +13,14 @@ suspends the calling process for
 .I ticks
 sixtieths of a second.
 .I Naphz
-returns the number of ticks in one second, as the kernel counts them
-.RI ( HZ ,
-60 on this machine); divide by it to convert, and do not assume the
+returns the number of nap ticks in one second
+.RB ( NAPHZ ,
+60 in this version); divide by it to convert, and do not assume the
 value.
+On UTS a nap tick is the driver's own unit, timed from the S/370 TOD
+clock: the kernel's
+.I HZ
+is 1 and has nothing to do with it.
 .PP
 Both open
 .B /dev/nap
@@ -55,15 +59,14 @@ sleep(3), alarm(2), time(2) for
 which measures sub-second time but cannot wait for it
 .SH BUGS
 A nap cannot be interrupted by a signal; the signal is delivered when
-the nap ends.  This is deliberate \- V7 has no
-.IR untimeout ()
-with which to cancel the pending callout \- and is why the maximum nap
-is short.
+the nap ends.  This keeps the driver from ever being left mid-nap by a
+non-local jump out of
+.IR sleep (),
+and is why the maximum nap is short.
 .PP
-.I Nap
-rounds nothing: it waits between
-.I ticks\-1
-and
+The deadline is computed from the TOD clock at the moment of the call,
+so a nap is never shorter than
 .I ticks
-ticks, because the current tick is already partly spent when the call
-is made.  Ask for one more tick than you need if the floor matters.
+ticks.  It may be longer: under VM/370 the clock comparator interrupt
+that ends it is simulated by CP, and the UTS virtual machine must then
+be dispatched before the napper runs.

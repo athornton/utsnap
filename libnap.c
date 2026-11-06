@@ -1,11 +1,11 @@
 /*
- * nap(), naphz() -- user-space wrappers for /dev/nap.  K&R C, V7 libc.
+ * nap(), naphz() -- user-space wrappers for /dev/nap.  K&R C, UTS libc.
  * See nap.3.
  */
 
 #include <nap.h>
 
-#define	FIOCLEX	(('f'<<8)|1)	/* tty.h is a kernel header; see BUGS */
+#define	FIOCLEX	(('f'<<8)|1)	/* as in sgtty.h and the kernel's tty.h */
 
 extern int errno;
 
@@ -13,8 +13,9 @@ static int napfd = -1;
 
 /*
  * Open /dev/nap once and cache it.  Marked close-on-exec so children do
- * not silently inherit a descriptor they did not ask for -- V7 has only
- * NOFILE (20) per process.
+ * not silently inherit a descriptor they did not ask for -- a process
+ * has only NOFILE of them.  ioctl() in dev/tty.c handles FIOCLEX itself,
+ * before the driver is consulted, so it works on any descriptor.
  */
 static
 napinit()
